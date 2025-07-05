@@ -1,0 +1,403 @@
+"""
+Adaptive Filters Example
+========================
+
+In this example, we will run adaptive filters for system identification.
+"""
+
+from __future__ import division, print_function
+
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.signal import fftconvolve
+
+import pyroomacoustics as pra
+
+# parameters
+length = 15  # the unknown filter length
+n_samples = 2000  # the number of samples to run
+SNR = 15  # signal to noise ratio
+
+# the unknown filter (unit norm)
+w = np.random.randn(length)
+w /= np.linalg.norm(w)
+
+# create a known driving signal
+x = np.random.randn(n_samples)
+
+# convolve with the unknown filter
+d_clean = fftconvolve(x, w)[:n_samples]
+
+# add some noise to the reference signal
+d = d_clean + np.random.randn(n_samples) * 10 ** (-SNR / 20.0)
+
+# create a bunch adaptive filters
+adfilt = dict(
+    nlms=dict(
+        filter=pra.adaptive.NLMS(length, mu=0.5),
+        error=np.zeros(n_samples),
+    ),
+    blocklms=dict(
+        filter=pra.adaptive.BlockLMS(length, mu=1.0 / 15.0 / 2.0),
+        error=np.zeros(n_samples),
+    ),
+    rls=dict(
+        filter=pra.adaptive.RLS(length, lmbd=1.0, delta=2.0),
+        error=np.zeros(n_samples),
+    ),
+    blockrls=dict(
+        filter=pra.adaptive.BlockRLS(length, lmbd=1.0, delta=2.0),
+        error=np.zeros(n_samples),
+    ),
+)
+
+for i in range(n_samples):
+    for algo in adfilt.values():
+        algo["filter"].update(x[i], d[i])
+        algo["error"][i] = np.linalg.norm(algo["filter"].w - w)
+
+plt.plot(w)
+for algo in adfilt.values():
+    plt.plot(algo["filter"].w)
+plt.title("Original and reconstructed filters")
+plt.legend(["groundtruth"] + list(adfilt))
+
+plt.figure()
+for algo in adfilt.values():
+    plt.semilogy(algo["error"])
+plt.legend(adfilt)
+plt.title("Convergence to unknown filter")
+plt.show()
+
+############################
+# CODIG ANTIGUO PARA CREAR ROOM TRAPEZOIDAL
+# --- Imports ---
+import numpy as np
+import matplotlib.pyplot as plt
+import pyroomacoustics as pra
+from scipy.io import wavfile
+from pyroomacoustics.directivities import CardioidFamily, DirectionVector
+from IPython.display import Audio
+
+# Planta trapezoidal: más ancha hacia atrás (forma de auditorio)
+floor_corners = np.array([
+    [5.0, 0.0],
+    [15.0, 0.0],
+    [20.0, 25.0],
+    [0, 25.0]
+]).T  # forma 2×4
+
+
+# Step A: Crear sala 2D
+rt60_target = 1.0
+e_absorption, max_order = pra.inverse_sabine(rt60_target, [20,25,8])
+
+room = pra.Room.from_corners(
+    floor_corners,
+    fs=16000,
+    materials=pra.Material(e_absorption),
+    max_order=max_order
+)
+
+# Step B: Extruir a 3D
+height = 8.0
+room.extrude(height)
+
+# --- Mostrar geometría en planta ---
+fig, ax = room.plot(img_order=1)
+plt.title("Plano del auditorio")
+plt.show()
+
+
+################333
+# --- Configurar la fuente (escenario al fondo) ---
+source_pos = [18.0, 6.0, 1.5]
+
+# Orientación apuntando al público
+orientation = DirectionVector(azimuth=-90, colatitude=90, degrees=True)
+dir_obj = CardioidFamily(
+    orientation=orientation,
+    p=0.25,        # Hypercardioid
+    gain=1.0
+)
+
+
+# --- Añadir fuente con directividad ---
+room.add_source(position=source_pos, signal=audio, delay=0.5, d   irectivity=dir_obj)
+
+# --- Colocar micrófono en la zona de público ---
+mic_pos = np.c_[[8.0, 6.0, 1.5]]
+room.add_microphone_array(mic_pos)
+
+# --- Mostrar geometría en planta ---
+fig, ax = room.plot(img_order=1)
+plt.title("Plano del Teatro con Escenario y Público")
+plt.show()
+
+# --- Mostrar la forma de la directividad de la fuente ---
+azimuths = np.linspace(0, 360, 361)
+response = dir_obj.get_response(azimuth=np.radians(azimuths), magnitude=True)
+response_db = 20 * np.log10(response / np.max(response) + 1e-12)  # Para evitar log(0)
+
+plt.figure(figsize=(4,4))
+ax = plt.subplot(111, projection='polar')
+ax.plot(np.radians(azimuths), response_db)
+ax.set_title('Patrón de Directividad de la Fuente (Hypercardioid p=0.25)')
+ax.set_ylim([-20, 0])
+plt.show()
+
+# --- Calcular RIR ---
+room.compute_rir()
+
+plt.figure()
+plt.plot(np.linspace(0, len(room.rir[0][0])/fs, len(room.rir[0][0])), room.rir[0][0])
+plt.title('Room Impulse Response (RIR) entre Fuente y Micrófono')
+plt.xlabel('Tiempo [s]')
+plt.ylabel('Amplitud')
+plt.show()
+
+################
+import pyroomacoustics as pra
+
+# The desired reverberation time and dimensions of the room
+rt60 = 0.5  # seconds
+room_dim = [9, 7.5, 3.5]  # meters
+
+# We invert Sabine's formula to obtain the parameters for the ISM simulator
+e_absorption, max_order = pra.inverse_sabine(rt60, room_dim)
+
+# Create the room
+room = pra.ShoeBox(
+    room_dim, fs=16000, materials=pra.Material(e_absorption), max_order=max_order
+)
+# import a mono wavfile as the source signal
+# the sampling frequency should match that of the room
+from scipy.io import wavfile
+_, audio = wavfile.read('arctic_a0010.wav')
+
+############################
+# place the source in the room
+room.add_source([2.5, 3.73, 1.76], signal=audio, delay=1.3)
+
+# define the locations of the microphones
+import numpy as np
+mic_locs = np.c_[
+    [6.3, 4.87, 1.2],  # mic 1
+    [6.3, 4.93, 1.2],  # mic 2
+]
+
+# finally place the array in the room
+room.add_microphone_array(mic_locs)
+
+room.compute_rir()
+
+# plot the RIR between mic 1 and source 0
+import matplotlib.pyplot as plt
+plt.plot(room.rir[1][0])
+plt.show()
+
+
+# create directivity object
+dir_obj = CardioidFamily(
+    orientation=DirectionVector(azimuth=90, colatitude=15, degrees=True),
+    p = 0.5,
+    gain = 1,
+)
+
+# place the source in the room
+room.add_source([2.5, 3.73, 1.76], signal=audio, delay=1.3, directivity=dir_obj)
+
+# define the locations of the microphones
+import numpy as np
+mic_locs = np.c_[
+    [6.3, 4.87, 1.2],  # mic 1
+    [6.3, 4.93, 1.2],  # mic 2
+]
+
+# finally place the array in the room
+room.add_microphone_array(mic_locs, directivity=dir_obj)
+
+room.compute_rir()
+
+# plot the RIR between mic 1 and source 0
+import matplotlib.pyplot as plt
+plt.plot(room.rir[1][0])
+plt.show()
+
+# a convolution of the signal of each source will be performed with the corresponding room impulse response
+room.simulate()
+
+# plot signal at microphone 1
+plt.plot(room.mic_array.signals[1,:])
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pyroomacoustics as pra
+from scipy.io import wavfile
+
+# The desired reverberation time and dimensions of the room
+rt60_tgt = 0.3  # seconds
+room_dim = [10, 7.5, 3.5]  # meters
+
+# import a mono wavfile as the source signal
+# the sampling frequency should match that of the room
+fs, audio = wavfile.read("guitar_16k.wav")
+
+# We invert Sabine's formula to obtain the parameters for the ISM simulator
+e_absorption, max_order = pra.inverse_sabine(rt60_tgt, room_dim)
+
+# Create the room
+room = pra.ShoeBox(
+    room_dim, fs=fs, materials=pra.Material(e_absorption), max_order=max_order
+)
+
+# place the source in the room
+room.add_source([2.5, 3.73, 1.76], signal=audio, delay=0.5)
+
+# define the locations of the microphones
+mic_locs = np.c_[
+    [6.3, 4.87, 1.2], [6.3, 4.93, 1.2],  # mic 1  # mic 2
+]
+
+# finally place the array in the room
+room.add_microphone_array(mic_locs)
+
+# Run the simulation (this will also build the RIR automatically)
+room.simulate()
+
+room.mic_array.to_wav(
+    f"guitar_16k_reverb.wav",
+    norm=True,
+    bitdepth=np.int16,
+)
+
+# measure the reverberation time
+rt60 = room.measure_rt60()
+print("The desired RT60 was {}".format(rt60_tgt))
+print("The measured RT60 is {}".format(rt60[1, 0]))
+
+# Create a plot
+plt.figure()
+
+# plot one of the RIR. both can also be plotted using room.plot_rir()
+rir_1_0 = room.rir[1][0]
+plt.subplot(2, 1, 1)
+plt.plot(np.arange(len(rir_1_0)) / room.fs, rir_1_0)
+plt.title("The RIR from source 0 to mic 1")
+plt.xlabel("Time [s]")
+
+# plot signal at microphone 1
+plt.subplot(2, 1, 2)
+plt.plot(room.mic_array.signals[1, :])
+plt.title("Microphone 1 signal")
+plt.xlabel("Time [s]")
+
+plt.tight_layout()
+plt.show()
+
+
+
+##################3
+#camara anecoica
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pyroomacoustics as pra
+
+methods = ["MUSIC", "FRIDA", "WAVES", "TOPS", "CSSM", "SRP", "NormMUSIC"]
+
+# seleccion del método que se quiera usar:
+selected_method = "FRIDA"
+
+# parámetros
+nfft = 256
+fs = 16000
+x = np.random.randn((nfft // 2 + 1) * nfft)
+
+# create anechoic room
+room = pra.AnechoicRoom(fs=fs)
+
+# fuente
+azimuth_true = np.pi / 2
+source_pos = [5 * np.cos(azimuth_true), 5 * np.sin(azimuth_true), 0]
+room.add_source(source_pos, signal=x)
+
+# micrófonos
+mic_locs = np.c_[
+    [0.1, 0.9, -10],
+    [-0.5, 0.1, -3],
+    [-0.1, -0.1, 10],
+    [0.1, -0.5, 5],
+]
+room.add_microphone_array(mic_locs)
+# plot
+fig, ax = plt.subplots(figsize=(6, 6))
+ax.set_title('Anechoic Room: Source and Microphones')
+
+# plot source
+ax.scatter(source_pos[0], source_pos[1], c='red', marker='*', s=200, label='Source')
+
+# plot mics
+ax.scatter(mic_locs[0,:], mic_locs[1,:], c='blue', marker='o', label='Mics')
+
+# draw lines
+for i in range(mic_locs.shape[1]):
+    ax.plot([mic_locs[0,i], source_pos[0]], [mic_locs[1,i], source_pos[1]], 'k--', alpha=0.3)
+
+# set limits with margin
+margin = 1.0  # meters
+x_min = min(np.min(mic_locs[0,:]), source_pos[0]) - margin
+x_max = max(np.max(mic_locs[0,:]), source_pos[0]) + margin
+y_min = min(np.min(mic_locs[1,:]), source_pos[1]) - margin
+y_max = max(np.max(mic_locs[1,:]), source_pos[1]) + margin
+
+ax.set_xlim(x_min, x_max)
+ax.set_ylim(y_min, y_max)
+
+ax.set_xlabel('X (meters)')
+ax.set_ylabel('Y (meters)')
+ax.legend()
+ax.grid(True)
+plt.show()
+
+
+# print results
+print("Source is estimated at:", doa.azimuth_recon)
+print("Real source is at:", azimuth_true)
+print("Error:", pra.doa.circ_dist(azimuth_true, doa.azimuth_recon))
+
+
+# after
+room.simulate()
+plt.figure(figsize=(10, 4))
+for i in range(room.mic_array.signals.shape[0]):
+    plt.plot(room.mic_array.signals[i], label=f'Mic {i+1}')
+plt.title('Señales simuladas en los micrófonos')
+plt.xlabel('Muestras')
+plt.ylabel('Amplitud')
+plt.legend()
+plt.show()
+print("Esto muestra cómo las señales en cada micrófono no son idénticas: tienen retardos y posibles atenuaciones por la distancia.")
+
+################33
+#medir distancia y delay entre microfonos
+speed_of_sound = 343  # m/s
+for i in range(mic_locs.shape[1]):
+    dist = np.linalg.norm(source_pos[:2] - mic_locs[:2,i])  # 2D distance
+    delay = dist / speed_of_sound
+    print(f"Mic {i+1}: distancia={dist:.2f} m, delay≈{delay*1000:.2f} ms")
+
+
+#espectrogramas de las señales
+from scipy.signal import spectrogram
+
+plt.figure(figsize=(12, 4))
+for i in range(room.mic_array.signals.shape[0]):
+    f, t, Sxx = spectrogram(room.mic_array.signals[i], fs=fs)
+    plt.pcolormesh(t, f, 10*np.log10(Sxx), shading='gouraud')
+    plt.title(f'Spectrograma Mic {i+1}')
+    plt.ylabel('Frecuencia [Hz]')
+    plt.xlabel('Tiempo [s]')
+    plt.colorbar(label='dB')
+    plt.show()
